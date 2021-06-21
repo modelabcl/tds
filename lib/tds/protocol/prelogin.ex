@@ -271,8 +271,16 @@ defmodule Tds.Protocol.Prelogin do
 
       # :threadid ->
       # :mars ->
-      # :fedauth ->
-      # :nonceopt ->
+      :fedauth ->
+        decode_data(
+          tokens,
+          tail,
+          %{m | fedauth: data == <<0x01>>}
+        )
+
+      :nonceopt ->
+        decode_data(tokens, tail, m)
+
       _ ->
         decode_data(tokens, tail, m)
     end

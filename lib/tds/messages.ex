@@ -11,6 +11,8 @@ defmodule Tds.Messages do
 
   # requests
   defrecord :msg_prelogin, [:params]
+  defrecord :msg_login7, [:params]
+  defrecord :msg_fedauth, [:params]
   defrecord :msg_login, [:params]
   defrecord :msg_ready, [:status]
   defrecord :msg_sql, [:query]
@@ -20,6 +22,8 @@ defmodule Tds.Messages do
 
   # responses
   defrecord :msg_preloginack, [:response]
+  defrecord :msg_fedauthinfo, [:response]
+  defrecord :msg_fedauthack, [:response]
   defrecord :msg_loginack, [:redirect]
   defrecord :msg_prepared, [:params]
   defrecord :msg_sql_result, [:columns, :rows, :row_count]
@@ -56,9 +60,11 @@ defmodule Tds.Messages do
   # @tds_pack_bulkloadbcp 7
   # @tds_pack_transmgrreq 14
   # @tds_pack_normal      15
-  # @tds_pack_login7      16
+  @tds_pack_login7 16
+  @tds_pack_fedauth 8
   # @tds_pack_sspimessage 17
   # @tds_pack_prelogin    18
+  @tds_feature_ext_terminator 0xFF
 
   ## Parsers
 
@@ -68,6 +74,19 @@ defmodule Tds.Messages do
       |> Tds.Protocol.Prelogin.decode(s)
 
     {msg_preloginack(response: response), s}
+  end
+
+  def parse(:login7, packet_data, s) do
+    packet_data
+    |> decode_tokens()
+    |> Enum.reduce({msg_fedauthinfo(), s}, fn
+      [_ | _] = data, {msg, s} ->
+        {msg_fedauthinfo(msg, response: data), s}
+
+      _, _ ->
+        # TODO
+        {:error, "unexpected error"}
+    end)
   end
 
   def parse(:login, packet_data, s) do
@@ -93,6 +112,10 @@ defmodule Tds.Messages do
 
       {:error, error}, _ ->
         {msg_error(error: error), s}
+
+      {:featureextack, :ok}, msg ->
+        # FeatureExtAck response without data when is ok
+        msg
 
       _, msg ->
         # FeatureExtAck should be processed here in future
@@ -255,6 +278,14 @@ defmodule Tds.Messages do
     # data = version <> terminator <> prelogin_data
     # encode_packets(0x12, data)
     Tds.Protocol.Prelogin.encode(opts)
+  end
+
+  defp encode(msg_login7(params: opts), _env) do
+    Tds.FedAuth.encode_login7(opts)
+  end
+
+  defp encode(msg_fedauth(params: opts), _env) do
+    Tds.FedAuth.encode_fedauth(opts)
   end
 
   defp encode(msg_login(params: params), _env) do
@@ -581,7 +612,7 @@ defmodule Tds.Messages do
   end
 
   def encode_header(type, data, id, status) do
-    length = byte_size(data) + 8
+    length = byte_size(data) + @tds_pack_header_size
     # id::unsigned-size(8) below basicaly deals overflow e.g. rem(id, 255)
     <<type, status, length::size(16), 0::size(16), id::unsigned-size(8), 0>>
   end

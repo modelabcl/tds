@@ -22,6 +22,11 @@ defmodule Tds.Protocol do
     :snapshot,
     :serializable
   ]
+  @type fedauth_credentials :: %{
+          id_token: charlist(),
+          access_token: charlist(),
+          refresh_token: charlist()
+        }
 
   @type sock :: {:gen_tcp | :ssl, port()}
   @type env :: %{
@@ -34,6 +39,8 @@ defmodule Tds.Protocol do
   @type state ::
           :ready
           | :prelogin
+          | :login7
+          | :fedauth
           | :login
           | :prepare
           | :executing
@@ -48,6 +55,7 @@ defmodule Tds.Protocol do
           result: nil | list(),
           query: nil | String.t(),
           transaction: transaction,
+          fedauth_credentials: nil | fedauth_credentials(),
           env: env
         }
 
@@ -61,6 +69,7 @@ defmodule Tds.Protocol do
             result: nil,
             query: nil,
             transaction: nil,
+            fedauth_credentials: nil,
             env: %{
               trans: <<0x00>>,
               savepoint: 0,
@@ -462,7 +471,7 @@ defmodule Tds.Protocol do
     end
   end
 
-   ## ssl
+  ## ssl
 
   defp ssl_connect(%{sock: {:gen_tcp, sock}, opts: opts} = s) do
     {:ok, _} = Application.ensure_all_started(:ssl)
@@ -470,7 +479,7 @@ defmodule Tds.Protocol do
 
     case Tds.Tls.connect(sock, opts[:ssl_opts] || []) do
       {:ok, ssl_sock} ->
-        state = %{s | sock: {:ssl, ssl_sock} }
+        state = %{s | sock: {:ssl, ssl_sock}}
         {:ok, state}
 
       {:error, reason} ->
@@ -480,6 +489,7 @@ defmodule Tds.Protocol do
               inspect(reason)
             }"
           )
+
         :gen_tcp.close(sock)
         {:error, error, s}
     end
@@ -565,8 +575,41 @@ defmodule Tds.Protocol do
     msg = msg_prelogin(params: opts)
 
     case msg_send(msg, %{s | state: :prelogin}) do
-      {:ok, s} -> login(s)
-      any -> any
+      {:ok, s} ->
+        case Keyword.get(opts, :authentication) do
+          {:fedauth, _, _} ->
+            fedauthinfo(s)
+
+          _ ->
+            login(s)
+        end
+
+      any ->
+        any
+    end
+  end
+
+  def fedauthinfo(%{opts: opts} = s) do
+    msg = msg_login7(params: opts)
+
+    case msg_send(msg, %{s | state: :login7}) do
+      {:ok, s} ->
+        fedauth(s)
+
+      any ->
+        any
+    end
+  end
+
+  def fedauth(%{opts: _opts} = s) do
+    msg = msg_fedauth(params: s.fedauth_credentials)
+
+    case msg_send(msg, %{s | state: :login}) do
+      {:ok, s} ->
+        {:ok, %{s | state: :ready}}
+
+      any ->
+        any
     end
   end
 
@@ -785,6 +828,15 @@ defmodule Tds.Protocol do
     end
   end
 
+  def message(:login7, msg_fedauthinfo(response: response), s) do
+    Tds.FedAuth.get_credentials(response, s)
+  end
+
+  def message(:fedauth, msg_fedauthack(response: response), _) do
+    IO.inspect(response, label: "message fedauth")
+    raise "funciona"
+  end
+
   def message(
         :login,
         msg_loginack(redirect: %{hostname: host, port: port}),
@@ -891,8 +943,11 @@ defmodule Tds.Protocol do
       |> encode_msg(env)
       |> Enum.reduce_while(:ok, fn chunk, _ ->
         case mod.send(port, chunk) do
-          {:error, reason} -> {:halt, {:error, reason}}
-          :ok -> {:cont, :ok}
+          {:error, reason} ->
+            {:halt, {:error, reason}}
+
+          :ok ->
+            {:cont, :ok}
         end
       end)
 
@@ -902,8 +957,11 @@ defmodule Tds.Protocol do
       |> IO.iodata_to_binary()
       |> decode(s)
     else
-      {:disconnect, _ex, _s} = res -> {0, res}
-      other -> other
+      {:disconnect, _ex, _s} = res ->
+        {0, res}
+
+      other ->
+        other
     end
   end
 

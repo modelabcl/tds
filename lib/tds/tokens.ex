@@ -25,6 +25,7 @@ defmodule Tds.Tokens do
           | :doneproc
           | :envchange
           | :error
+          | :fedauthinfo
           | :info
           | :loginack
           | :order
@@ -52,7 +53,7 @@ defmodule Tds.Tokens do
         0xE3 -> decode_envchange(tail, collmetadata)
         0xAA -> decode_error(tail, collmetadata)
         # 0xAE -> decode_featureextack(tail, collmetadata)
-        # 0xEE -> decode_fedauthinfo(tail, collmetadata)
+        0xEE -> decode_fedauthinfo(tail, collmetadata)
         0xAB -> decode_info(tail, collmetadata)
         0xAD -> decode_loginack(tail, collmetadata)
         0xD2 -> decode_nbcrow(tail, collmetadata)
@@ -147,6 +148,10 @@ defmodule Tds.Tokens do
     # TODO Need to concat errors for delivery
     # Logger.debug "SQL Error: #{inspect e}"
     {{:error, e}, tail, collmetadata}
+  end
+
+  defp decode_fedauthinfo(data, collmetadata) do
+    {Tds.FedAuth.parse_info(data), "", collmetadata}
   end
 
   defp decode_info(
